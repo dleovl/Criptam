@@ -63,12 +63,7 @@ class Device:
 
         usb.util.dispose_resources(device)
 
-        ipsw_api = requests.get('https://api.ipsw.me/v4/devices').json()
-        for device in ipsw_api:
-            for board in device['boards']:
-                if board['cpid'] == self.chip_id and board['bdid'] == self.board_id:
-                    self._identifier = device['identifier']
-                    break
+        self._identifier = ""
 
     @property
     def board_id(self) -> int:

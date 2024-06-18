@@ -1,18 +1,14 @@
 import platform
 import sys
+import json
 from typing import Optional
 
 import click
 import pyimg4
-import requests
 
 from . import __version__
 from .device import Device
 from .ipsw import IPSW
-
-RELEASE_API = 'https://api.ipsw.me/v4/device'
-BETA_API = 'https://api.m1sta.xyz/betas'
-
 
 @click.command()
 @click.version_option(message=f'Criptam {__version__}')
@@ -85,37 +81,28 @@ def main(
         identifier = device.identifier
 
     click.echo(f'Getting firmware information for device: {identifier}...')
+    click.echo(f'Detected SOC: {device.soc}')
+    click.echo(f'Supplied identifier: {identifier}')
 
     firmwares = list()
-    for API_URL in (RELEASE_API, BETA_API):
-        api = requests.get(f'{API_URL}/{identifier}').json()
+    try:
+        with open('fw.json', 'r') as f:
+            api = json.load(f)
+            print(f"Loaded JSON from fw.json")
+    except json.JSONDecodeError as e:
+        click.echo(f"[ERROR] Failed to decode JSON: {e}")
+        return
+    except FileNotFoundError as e:
+        click.echo(f"[ERROR] File not found: {e}")
+        return
 
-        if API_URL == RELEASE_API:
-            if identifier != device.identifier:
-                if not any(
-                    board for board in api['boards'] if board['cpid'] == device.chip_id
-                ):
-                    if 0x8720 <= api['cpid'] <= 0x8960:
-                        soc = f"S5L{api['cpid']:02x}"
-                    elif device.chip_id in range(0x7002, 0x8003):
-                        soc = f"S{api['cpid']:02x}"
-                    else:
-                        soc = f"T{api['cpid']:02x}"
+    firms = api.get('firmwares', [])
 
-                    click.echo(
-                        f"SoC of provided device identifier: {identifier} ({soc}) does not match connected device: {device.identifier} ({device.soc}). Exiting."
-                    )
-                    return
+    for firm in firms:
+        if any(firm['buildid'] == f['buildid'] for f in firmwares):
+            continue
 
-            firms = api['firmwares']
-        elif API_URL == BETA_API:
-            firms = api
-
-        for firm in firms:
-            if any(firm['buildid'] == f['buildid'] for f in firmwares):
-                continue
-
-            firmwares.append(firm)
+        firmwares.append(firm)
 
     firmwares = sorted(firmwares, key=lambda x: x['buildid'], reverse=True)
 
@@ -132,9 +119,6 @@ def main(
         return
 
     buildid = firmware['buildid']
-
-    ipsw = IPSW(device, firmware['url'])
-    manifest = ipsw.read_manifest()
 
     try:
         ipsw = IPSW(device, firmware['url'])
@@ -205,3 +189,6 @@ def main(
 
             if component != 'iBoot':
                 click.echo()
+
+if __name__ == '__main__':
+    main()
