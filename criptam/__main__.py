@@ -1,6 +1,7 @@
 import platform
 import sys
 import json
+import subprocess
 from typing import Optional
 
 import click
@@ -80,9 +81,8 @@ def main(
     else:
         identifier = device.identifier
 
-    click.echo(f'Getting firmware information for device: {identifier}...')
     click.echo(f'Detected SOC: {device.soc}')
-    click.echo(f'Supplied identifier: {identifier}')
+    click.echo(f'Please ensure this data is correct before using these keys!')
 
     firmwares = list()
     try:
@@ -123,13 +123,23 @@ def main(
     try:
         ipsw = IPSW(device, firmware['url'])
         manifest = ipsw.read_manifest()
-    except:
+    except Exception as e:
         click.echo(
             f'Failed to download build manifest for firmware: {buildid}, device: {device.identifier}. Exiting.'
         )
+        print(f"Exception: {e}")
         return
 
-    identity = next(id_ for id_ in manifest.identities if id_.chip_id == device.chip_id)
+    try:
+        cmd = "irecovery -q | awk '/MODEL/ {print $NF}'"
+        cmdres = subprocess.check_output(['bash', '-c', cmd]).decode('utf-8').strip()
+        click.echo(f'Detected model: {cmdres}')
+        identity = next(id_ for id_ in manifest.identities if id_.board_config == cmdres)
+    except StopIteration:
+        click.echo(
+            f'Failed to find matching identity for chip ID: {device.chip_id}. Exiting.'
+        )
+        return
 
     click.echo(f'Decrypting keys for firmware: {buildid}, device: {identifier}...')
 
@@ -140,20 +150,33 @@ def main(
         'iBoot': None,
     }
     for component in keybags.keys():
-        image = pyimg4.IM4P(
-            ipsw.read_file(next(i.path for i in identity.images if i.name == component))
-        )
+        try:
+            image = pyimg4.IM4P(
+                ipsw.read_file(next(i.path for i in identity.images if i.name == component))
+            )
+        except StopIteration:
+            click.echo(
+                f'Failed to find {component} for firmware: {buildid}, device: {device.identifier}. Exiting.'
+            )
+            return
+
         if image is None:
             click.echo(
                 f'Failed to download {component} for firmware: {buildid}, device: {device.identifier}. Exiting.'
             )
             return
 
-        keybag = next(
-            kbag
-            for kbag in image.payload.keybags
-            if kbag.type == pyimg4.KeybagType.PRODUCTION
-        )
+        try:
+            keybag = next(
+                kbag
+                for kbag in image.payload.keybags
+                if kbag.type == pyimg4.KeybagType.PRODUCTION
+            )
+        except StopIteration:
+            click.echo(
+                f'Failed to find production keybag for {component} in firmware: {buildid}, device: {device.identifier}. Exiting.'
+            )
+            return
 
         keybags[component] = device.decrypt_keybag(
             keybag, _backend='ipwndfu' if not use_gaster else 'gaster'
